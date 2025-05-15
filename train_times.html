@@ -1,0 +1,404 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Train Times</title>
+    <style>
+        body {
+            font-family: sans-serif;
+            margin: 20px;
+            background-color: #000000;
+            color: #ffffff;
+        }
+        .container {
+            max-width: 600px;
+            margin: 0 auto;
+            background-color: #575757;
+            padding: 20px;
+            border-radius: 8px;
+        }
+        h1 {
+            text-align: center;
+            color: #ffffff; /* MTA blue-ish */
+            margin-bottom: 15px;
+        }
+        h2 {
+            margin-top: 20px;
+            margin-bottom: 10px;
+            color: #ffffff;
+            border-bottom: 1px solid #eee;
+            padding-bottom: 5px;
+        }
+        .train-list {
+            list-style: none;
+            padding: 0;
+            margin: 0;
+        }
+        .train-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 10px 0;
+            border-bottom: 1px solid #bdbdbd;
+        }
+        .train-row:last-child {
+            border-bottom: none;
+        }
+        .line-info {
+            display: flex;
+            align-items: center;
+            flex-grow: 1;
+        }
+        .line-id {
+            font-weight: bold;
+            margin-right: 10px;
+            /* Properties for making it a circle */
+            width: 28px;      /* Set a fixed width */
+            height: 28px;     /* Set a fixed height (must match width) */
+            line-height: 28px;/* Vertically center text by matching height */
+            border-radius: 50%; /* Make it a circle */
+            /* Keep original text/color styles */
+            color: white;
+            text-align: center; /* Horizontally center text */
+            display: inline-block; /* Ensure width/height are respected */
+            flex-shrink: 0; /* Prevent it from shrinking in the flex container */
+        }
+        /* Basic colors for popular lines - you can add more */
+        .line-id.line-1 { background-color: #EE352E; } /* Red */
+        .line-id.line-2 { background-color: #EE352E; } /* Red */
+        .line-id.line-3 { background-color: #EE352E; } /* Red */
+        .line-id.line-4 { background-color: #00933C; } /* Green */
+        .line-id.line-5 { background-color: #00933C; } /* Green */
+        .line-id.line-6 { background-color: #00933C; } /* Green */
+        .line-id.line-A { background-color: #2850ad; } /* Blue */
+        .line-id.line-C { background-color: #2850ad; } /* Blue */
+        .line-id.line-E { background-color: #2850ad; } /* Blue */
+        .line-id.line-L { background-color: #A7A9AC; } /* Grey */
+        .line-id.line-N { background-color: #FCCC0A; color: #2e2e2e; } /* Yellow */
+        .line-id.line-Q { background-color: #FCCC0A; color: #2e2e2e; } /* Yellow */
+        /* Add more line colors as needed */
+
+
+        .line-status {
+            font-size: 0.9em;
+            color: #ffffff;
+            margin-right: 10px;
+        }
+        .next-times {
+            font-weight: bold;
+            color: #ffffff; /* Blue for times */
+        }
+         .next-times.due {
+             color: #29ff5b; /* Green for "Due" */
+         }
+        .last-updated {
+            text-align: center;
+            font-size: 0.8em;
+            color: #ffffff;
+            margin-top: 20px;
+        }
+        .error {
+             color: red;
+             text-align: center;
+             margin-top: 20px;
+        }
+        .loading {
+             text-align: center;
+             color: #ffffff;
+             margin-top: 20px;
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h1 id="station-name">Loading Station Info...</h1>
+
+    <div id="uptown-section">
+        <h2>Uptown</h2>
+        <ul id="uptown-list" class="train-list">
+            <!-- Train rows will be inserted here by JavaScript -->
+        </ul>
+    </div>
+
+    <div id="downtown-section">
+        <h2>Downtown</h2>
+        <ul id="downtown-list" class="train-list">
+            <!-- Train rows will be inserted here by JavaScript -->
+        </ul>
+    </div>
+
+    <div id="status-area">
+        <div id="loading-status" class="loading">Loading data...</div>
+        <div id="last-updated" class="last-updated" style="display: none;"></div>
+        <div id="error-message" class="error" style="display: none;"></div>
+    </div>
+
+</div>
+
+<script>
+    // --- Configuration ---
+    const STOPS_API_URL = "https://www.goodservice.io/api/stops/";
+    const ROUTES_API_URL = "https://www.goodservice.io/api/routes/?detailed=1";
+
+    // --- Replace with the actual station ID you want to display ---
+    // You can find station IDs by inspecting the stops API data
+    // Examples from the Python code (using correct goodservice.io IDs)
+    // The IDs in the original Python code were likely placeholders.
+    // Let's use real-ish examples for common stations.
+    // You can find exact IDs by looking at the API response at https://www.goodservice.io/api/stops/
+    // Example: Grand Central-42 St (4,5,6,7,S) - common ID for 4/5/6 is 631
+    // Example: Times Sq-42 St (1,2,3,7,N,Q,R,W,S,A,C,E) - common ID for 1/2/3 is 127
+    // Example: 72 St (1/2/3) - common ID for 1/2/3 is 123 (This matches the python example!)
+    const TARGET_STOP_ID = "123"; // Example: 72 St (1/2/3)
+    const HUMAN_READABLE_NAME = '72nd St (1/2/3)'; // Matches the example
+
+    const NEXT_TRAINS_TO_SHOW = 3;
+    const REFRESH_INTERVAL_MS = 60000; // Refresh every 60 seconds (1 minute)
+
+    // --- Global Data Storage ---
+    let stopsData = null;
+    let routesData = null;
+    let isLoading = false;
+
+    // --- Utility Functions ---
+
+    async function queryApi(url) {
+        try {
+            const response = await fetch(url);
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
+            return await response.json();
+        } catch (error) {
+            console.error("API query failed:", error);
+            throw error; // Re-throw to be caught by the update function
+        }
+    }
+
+    function getLinesFromStopId(stopId) {
+        if (!stopsData || !stopsData.stops) {
+            console.warn("stopsData or stopsData.stops is missing or not loaded properly.");
+            console.log("stopsData is:", stopsData);
+            return [];
+        }
+
+        console.log(`Searching for stop ID "${stopId}" within ${stopsData.stops.length} stops.`);
+        const stop = stopsData.stops.find(s => s.id === stopId);
+
+        if (!stop) {
+            console.warn(`Stop with ID "${stopId}" not found in stops data.`);
+             if (stopsData.stops.length > 0) {
+                 console.log("Some stop IDs found:", stopsData.stops.slice(0, 10).map(s => s.id).join(", ") + (stopsData.stops.length > 10 ? ", ..." : ""));
+             }
+            return [];
+        }
+
+        // --- Handle both array and object structure for stop.routes ---
+        console.log(`Found stop object for ID "${stopId}":`, stop);
+        console.log(`Value of stop.routes for ID "${stopId}":`, stop.routes);
+        console.log(`Type of stop.routes: ${typeof stop.routes}`);
+        console.log(`Is stop.routes an array?`, Array.isArray(stop.routes));
+
+        if (stop.routes) { // Check if routes property exists
+            if (Array.isArray(stop.routes)) {
+                console.log("stop.routes is an array, returning it.");
+                return stop.routes; // Case 1: It's the simple array (e.g., ["A", "C", "E"])
+            } else if (typeof stop.routes === 'object' && stop.routes !== null) {
+                 console.log("stop.routes is an object, extracting keys as lines.");
+                 // Case 2: It's an object where keys are line IDs (e.g., {1: [...], 2: [...], 3: [...], 5: [...]})
+                 const lines = Object.keys(stop.routes);
+                 console.log("Extracted lines:", lines);
+                 return lines; // Return an array of the object keys (e.g., ["1", "2", "3", "5"])
+            }
+        }
+
+        // If routes property is missing, null, or neither array nor object
+        console.error(`Stop object for ID "${stopId}" does not have 'routes' as a valid array or object.`, stop.routes);
+        return [];
+    }
+
+
+    function getLineStatus(line, direction) {
+        if (!routesData || !routesData.routes || !routesData.routes[line] || !routesData.routes[line].direction_statuses) {
+            return "Unknown Status";
+        }
+        // Goodservice API uses "north" and "south" directions
+        const apiDirection = direction === 'uptown' ? 'north' : 'south';
+        return routesData.routes[line].direction_statuses[apiDirection] || "Unknown Status";
+    }
+
+    function getNextTrains(stationId, line, direction) {
+        if (!routesData || !routesData.routes || !routesData.routes[line] || !routesData.routes[line].trips) {
+            return [];
+        }
+
+        const now = Date.now() / 1000; // Current time in seconds since epoch
+        // Goodservice API uses "north" and "south" directions
+        const apiDirection = direction === 'uptown' ? 'north' : 'south';
+        const currentTrips = routesData.routes[line].trips[apiDirection];
+
+        if (!currentTrips) return [];
+
+        const stopTimes = [];
+        for (const trip of currentTrips) {
+            if (trip.stops && trip.stops.hasOwnProperty(stationId)) {
+                 // stop time is in seconds since epoch
+                const timeDiffSeconds = trip.stops[stationId] - now;
+                const timeDiffMinutes = Math.floor(timeDiffSeconds / 60);
+                // Only add times that are in the future or very near future (within the last minute)
+                // The original Python was >= 0, which is fine, but let's be slightly generous
+                // to catch trains arriving "Due"
+                if (timeDiffMinutes >= -1) { // Consider trains arriving now or very soon
+                   stopTimes.push(timeDiffMinutes);
+                }
+            }
+        }
+
+        // Sort by time, ascending
+        stopTimes.sort((a, b) => a - b);
+
+        // Filter out negative times and take the next N
+        return stopTimes.filter(time => time >= 0).slice(0, NEXT_TRAINS_TO_SHOW);
+    }
+
+    function renderTimes(timesArray) {
+        if (timesArray.length === 0) {
+            return "-"; // No upcoming trains found
+        }
+
+        return timesArray.map(time => {
+            if (time === 0) {
+                return '<span class="next-times due">Due</span>';
+            } else {
+                return time + "m";
+            }
+        }).join(", ");
+    }
+
+    function getLineColorClass(lineId) {
+        // Simple mapping for some lines. Add more as needed based on Goodservice or MTA colors.
+        const colors = {
+            '1': 'line-1', '2': 'line-2', '3': 'line-3',
+            '4': 'line-4', '5': 'line-5', '6': 'line-6',
+            'A': 'line-A', 'C': 'line-C', 'E': 'line-E',
+            'L': 'line-L',
+            'N': 'line-N', 'Q': 'line-Q', 'R': 'line-R', 'W': 'line-W',
+            'B': 'line-B', 'D': 'line-D', 'F': 'line-F', 'M': 'line-M',
+            'G': 'line-G',
+            'J': 'line-J', 'Z': 'line-Z',
+            '7': 'line-7',
+            'S': 'line-S' // Shuttle
+        };
+         // Handle lines with multiple characters or special cases if needed
+        return colors[lineId] || ''; // Return empty string if no specific class
+    }
+
+
+    function displayTrainLine(containerId, stopId, lineId, direction) {
+        const container = document.getElementById(containerId);
+        if (!container) {
+            console.error("Container not found:", containerId);
+            return;
+        }
+
+        const status = getLineStatus(lineId, direction);
+        const nextTimes = getNextTrains(stopId, lineId, direction);
+        const renderedTimes = renderTimes(nextTimes);
+        const lineColorClass = getLineColorClass(lineId);
+
+        const row = document.createElement('li');
+        row.className = 'train-row';
+        row.innerHTML = `
+            <div class="line-info">
+                 <span class="line-id ${lineColorClass}">${lineId}</span>
+                 <span class="line-status">${status}</span>
+            </div>
+            <div class="next-times">${renderedTimes}</div>
+        `;
+        container.appendChild(row);
+    }
+
+    async function updateTrainTimes() {
+        if (isLoading) return; // Prevent multiple simultaneous updates
+        isLoading = true;
+
+        const loadingStatusDiv = document.getElementById('loading-status');
+        const lastUpdatedDiv = document.getElementById('last-updated');
+        const errorDiv = document.getElementById('error-message');
+        const stationNameH1 = document.getElementById('station-name');
+        const uptownList = document.getElementById('uptown-list');
+        const downtownList = document.getElementById('downtown-list');
+
+
+        // Clear previous content and show loading
+        errorDiv.style.display = 'none';
+        lastUpdatedDiv.style.display = 'none';
+        loadingStatusDiv.style.display = 'block';
+        uptownList.innerHTML = ''; // Clear previous lists
+        downtownList.innerHTML = '';
+
+
+        try {
+            // Fetch data if not already available
+            if (!stopsData) {
+                 console.log("Fetching stops data...");
+                 stopsData = await queryApi(STOPS_API_URL);
+            }
+            if (!routesData) {
+                 console.log("Fetching routes data...");
+                 routesData = await queryApi(ROUTES_API_URL);
+            }
+
+            if (!stopsData || !routesData) {
+                 throw new Error("Failed to load necessary API data.");
+            }
+
+            // Set station name once after data is loaded
+            stationNameH1.textContent = HUMAN_READABLE_NAME;
+
+            const lines = getLinesFromStopId(TARGET_STOP_ID);
+            if (lines.length === 0) {
+                uptownList.innerHTML = '<li>No train lines found for this stop ID. Check configuration.</li>';
+                downtownList.innerHTML = '<li>No train lines found for this stop ID. Check configuration.</li>';
+                throw new Error(`No lines found for stop ID: ${TARGET_STOP_ID}`); // <-- Corrected line
+            }
+
+            // Display train times for each line
+            lines.forEach(line => {
+                displayTrainLine('uptown-list', TARGET_STOP_ID, line, 'uptown');
+            });
+            lines.forEach(line => {
+                displayTrainLine('downtown-list', TARGET_STOP_ID, line, 'downtown');
+            });
+
+            // Update last updated timestamp
+            const now = new Date();
+            lastUpdatedDiv.textContent = `Last updated: ${now.toLocaleTimeString()}`;
+            lastUpdatedDiv.style.display = 'block';
+
+
+        } catch (error) {
+            console.error("Error updating train times:", error);
+            errorDiv.textContent = `Error: ${error.message || 'Failed to fetch train data.'}`;
+            errorDiv.style.display = 'block';
+            stationNameH1.textContent = HUMAN_READABLE_NAME + ' (Error)'; // Indicate error in title
+            lastUpdatedDiv.style.display = 'none'; // Hide last updated on error
+
+        } finally {
+            loadingStatusDiv.style.display = 'none';
+            isLoading = false;
+        }
+    }
+
+    // --- Initialize and Setup Refresh ---
+    document.addEventListener('DOMContentLoaded', () => {
+        updateTrainTimes(); // Initial load
+        setInterval(updateTrainTimes, REFRESH_INTERVAL_MS); // Set up periodic refresh
+    });
+
+</script>
+
+</body>
+</html>
