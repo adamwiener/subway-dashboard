@@ -20,12 +20,15 @@
         }
         h1 {
             text-align: center;
+            font-size: 3em;
             color: #ffffff; /* MTA blue-ish */
-            margin-bottom: 15px;
+            margin-bottom: 30px;
+
         }
         h2 {
             margin-top: 20px;
             margin-bottom: 10px;
+            font-size: 2em;
             color: #ffffff;
             border-bottom: 1px solid #eee;
             padding-bottom: 5px;
@@ -52,11 +55,12 @@
         }
         .line-id {
             font-weight: bold;
+            font-size: 24px;
             margin-right: 10px;
             /* Properties for making it a circle */
-            width: 28px;      /* Set a fixed width */
-            height: 28px;     /* Set a fixed height (must match width) */
-            line-height: 28px;/* Vertically center text by matching height */
+            width: 38px;      /* Set a fixed width */
+            height: 38px;     /* Set a fixed height (must match width) */
+            line-height: 38px;/* Vertically center text by matching height */
             border-radius: 50%; /* Make it a circle */
             /* Keep original text/color styles */
             color: white;
@@ -81,20 +85,24 @@
 
 
         .line-status {
-            font-size: 0.9em;
+            font-size: 1.2em;
             color: #ffffff;
             margin-right: 10px;
         }
         .next-times {
             font-weight: bold;
+            font-size: 1.2em;
             color: #ffffff; /* Blue for times */
         }
          .next-times.due {
              color: #29ff5b; /* Green for "Due" */
+             font-size: 1.2em;
          }
         .last-updated {
             text-align: center;
-            font-size: 0.8em;
+            font-weight: bold;
+            letter-spacing: 1px;
+            font-size: 1.2em;
             color: #ffffff;
             margin-top: 20px;
         }
@@ -139,32 +147,84 @@
 
 <script>
     // --- Configuration ---
+    const USE_DUMMY_DATA = false; // <-- Set this to false to use the live API
     const STOPS_API_URL = "https://www.goodservice.io/api/stops/";
     const ROUTES_API_URL = "https://www.goodservice.io/api/routes/?detailed=1";
 
-    // --- Replace with the actual station ID you want to display ---
-    // You can find station IDs by inspecting the stops API data
-    // Examples from the Python code (using correct goodservice.io IDs)
-    // The IDs in the original Python code were likely placeholders.
-    // Let's use real-ish examples for common stations.
-    // You can find exact IDs by looking at the API response at https://www.goodservice.io/api/stops/
-    // Example: Grand Central-42 St (4,5,6,7,S) - common ID for 4/5/6 is 631
-    // Example: Times Sq-42 St (1,2,3,7,N,Q,R,W,S,A,C,E) - common ID for 1/2/3 is 127
-    // Example: 72 St (1/2/3) - common ID for 1/2/3 is 123 (This matches the python example!)
     const TARGET_STOP_ID = "123"; // Example: 72 St (1/2/3)
-    const HUMAN_READABLE_NAME = '72nd St (1/2/3)'; // Matches the example
-
+    const HUMAN_READABLE_NAME = '72nd & Broadway';
     const NEXT_TRAINS_TO_SHOW = 3;
-    const REFRESH_INTERVAL_MS = 60000; // Refresh every 60 seconds (1 minute)
+    const REFRESH_INTERVAL_MS = 60000; // 60 seconds
 
-    // --- Global Data Storage ---
-    let stopsData = null;
-    let routesData = null;
-    let isLoading = false;
+    // --- Dummy Data for Development ---
+    const dummyStopsData = {
+        stops: [
+            {
+                id: "123",
+                name: "72nd St",
+                routes: ["1", "2", "3"]
+            }
+        ]
+    };
+
+    const dummyRoutesData = {
+        routes: {
+            "1": {
+                direction_statuses: {
+                    north: "Good Service",
+                    south: "Delayed"
+                },
+                trips: {
+                    north: [
+                        { stops: { "123": Math.floor(Date.now() / 1000) + 60 } },
+                        { stops: { "123": Math.floor(Date.now() / 1000) + 180 } },
+                        { stops: { "123": Math.floor(Date.now() / 1000) + 500 } }
+                    ],
+                    south: [
+                        { stops: { "123": Math.floor(Date.now() / 1000) + 120 } },
+                        { stops: { "123": Math.floor(Date.now() / 1000) + 270 } }
+                    ]
+                }
+            },
+            "2": {
+                direction_statuses: {
+                    north: "Planned Work",
+                    south: "Good Service"
+                },
+                trips: {
+                    north: [
+                        { stops: { "123": Math.floor(Date.now() / 1000) + 90 } }
+                    ],
+                    south: [
+                        { stops: { "123": Math.floor(Date.now() / 1000) + 240 } }
+                    ]
+                }
+            },
+            "3": {
+                direction_statuses: {
+                    north: "Good Service",
+                    south: "Good Service"
+                },
+                trips: {
+                    north: [],
+                    south: []
+                }
+            }
+        }
+    };
 
     // --- Utility Functions ---
-
     async function queryApi(url) {
+        if (USE_DUMMY_DATA) {
+            if (url === STOPS_API_URL) {
+                return dummyStopsData;
+            } else if (url === ROUTES_API_URL) {
+                return dummyRoutesData;
+            } else {
+                throw new Error("Unknown dummy API endpoint: " + url);
+            }
+        }
+
         try {
             const response = await fetch(url);
             if (!response.ok) {
@@ -173,9 +233,15 @@
             return await response.json();
         } catch (error) {
             console.error("API query failed:", error);
-            throw error; // Re-throw to be caught by the update function
+            throw error;
         }
     }
+    // --- Global Data Storage ---
+    let stopsData = null;
+    let routesData = null;
+    let isLoading = false;
+
+    // --- Utility Functions ---
 
     function getLinesFromStopId(stopId) {
         if (!stopsData || !stopsData.stops) {
