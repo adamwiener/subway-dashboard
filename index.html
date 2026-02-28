@@ -148,8 +148,9 @@
 <script>
     // --- Configuration ---
     const USE_DUMMY_DATA = false; // <-- Set this to false to use the live API
-    const STOPS_API_URL = "https://www.goodservice.io/api/stops/";
-    const ROUTES_API_URL = "https://www.goodservice.io/api/routes/?detailed=1";
+    const API_BASE_URL = "https://api.subwaynow.app";
+    const STOPS_API_URL = `${API_BASE_URL}/stops`;
+    const ROUTES_API_URL = `${API_BASE_URL}/routes`;
 
     const TARGET_STOP_ID = "123"; // Example: 72 St (1/2/3)
     const HUMAN_READABLE_NAME = '72nd & Broadway';
@@ -214,12 +215,63 @@
     };
 
     // --- Utility Functions ---
+    function buildDummyStopDetails(stopId) {
+        const now = Math.floor(Date.now() / 1000);
+        const northTrips = [];
+        const southTrips = [];
+
+        Object.entries(dummyRoutesData.routes).forEach(([routeId, routeData]) => {
+            const northRouteTrips = routeData?.trips?.north || [];
+            const southRouteTrips = routeData?.trips?.south || [];
+
+            northRouteTrips.forEach(trip => {
+                if (trip.stops && trip.stops[stopId]) {
+                    northTrips.push({
+                        route_id: routeId,
+                        estimated_current_stop_arrival_time: trip.stops[stopId]
+                    });
+                }
+            });
+
+            southRouteTrips.forEach(trip => {
+                if (trip.stops && trip.stops[stopId]) {
+                    southTrips.push({
+                        route_id: routeId,
+                        estimated_current_stop_arrival_time: trip.stops[stopId]
+                    });
+                }
+            });
+        });
+
+        return {
+            id: stopId,
+            name: "72 St",
+            upcoming_trips: {
+                north: northTrips,
+                south: southTrips
+            },
+            timestamp: now
+        };
+    }
+
     async function queryApi(url) {
         if (USE_DUMMY_DATA) {
             if (url === STOPS_API_URL) {
                 return dummyStopsData;
             } else if (url === ROUTES_API_URL) {
                 return dummyRoutesData;
+            } else if (url === `${API_BASE_URL}/stops/${TARGET_STOP_ID}`) {
+                return buildDummyStopDetails(TARGET_STOP_ID);
+            } else if (url.startsWith(`${API_BASE_URL}/routes/`)) {
+                const routeId = url.split('/').pop();
+                if (dummyRoutesData.routes[routeId]) {
+                    return {
+                        id: routeId,
+                        direction_statuses: dummyRoutesData.routes[routeId].direction_statuses,
+                        status: "Good Service"
+                    };
+                }
+                return null;
             } else {
                 throw new Error("Unknown dummy API endpoint: " + url);
             }
@@ -239,6 +291,8 @@
     // --- Global Data Storage ---
     let stopsData = null;
     let routesData = null;
+    let stopDetailsData = null;
+    let routeDetailsByLine = {};
     let isLoading = false;
 
     // --- Utility Functions ---
@@ -287,38 +341,46 @@
 
 
     function getLineStatus(line, direction) {
-        if (!routesData || !routesData.routes || !routesData.routes[line] || !routesData.routes[line].direction_statuses) {
-            return "Unknown Status";
-        }
-        // Goodservice API uses "north" and "south" directions
+        const routeDetails = routeDetailsByLine[line];
         const apiDirection = direction === 'uptown' ? 'north' : 'south';
-        return routesData.routes[line].direction_statuses[apiDirection] || "Unknown Status";
+
+        if (routeDetails && routeDetails.direction_statuses) {
+            return routeDetails.direction_statuses[apiDirection] || routeDetails.status || "Unknown Status";
+        }
+
+        if (routesData && routesData.routes && routesData.routes[line]) {
+            return routesData.routes[line].status || "Unknown Status";
+        }
+
+        return "Unknown Status";
     }
 
     function getNextTrains(stationId, line, direction) {
-        if (!routesData || !routesData.routes || !routesData.routes[line] || !routesData.routes[line].trips) {
+        if (!stopDetailsData || !stopDetailsData.upcoming_trips) {
             return [];
         }
 
-        const now = Date.now() / 1000; // Current time in seconds since epoch
-        // Goodservice API uses "north" and "south" directions
+        const now = Date.now() / 1000;
         const apiDirection = direction === 'uptown' ? 'north' : 'south';
-        const currentTrips = routesData.routes[line].trips[apiDirection];
+        const currentTrips = stopDetailsData.upcoming_trips[apiDirection];
 
         if (!currentTrips) return [];
 
         const stopTimes = [];
         for (const trip of currentTrips) {
-            if (trip.stops && trip.stops.hasOwnProperty(stationId)) {
-                 // stop time is in seconds since epoch
-                const timeDiffSeconds = trip.stops[stationId] - now;
-                const timeDiffMinutes = Math.floor(timeDiffSeconds / 60);
-                // Only add times that are in the future or very near future (within the last minute)
-                // The original Python was >= 0, which is fine, but let's be slightly generous
-                // to catch trains arriving "Due"
-                if (timeDiffMinutes >= -1) { // Consider trains arriving now or very soon
-                   stopTimes.push(timeDiffMinutes);
-                }
+            if (trip.route_id !== line) {
+                continue;
+            }
+
+            const arrivalTime = trip.estimated_current_stop_arrival_time ?? trip.current_stop_arrival_time;
+            if (typeof arrivalTime !== 'number') {
+                continue;
+            }
+
+            const timeDiffSeconds = arrivalTime - now;
+            const timeDiffMinutes = Math.floor(timeDiffSeconds / 60);
+            if (timeDiffMinutes >= 0) {
+                stopTimes.push(timeDiffMinutes);
             }
         }
 
@@ -416,8 +478,9 @@
                  console.log("Fetching routes data...");
                  routesData = await queryApi(ROUTES_API_URL);
             }
+            stopDetailsData = await queryApi(`${API_BASE_URL}/stops/${TARGET_STOP_ID}`);
 
-            if (!stopsData || !routesData) {
+            if (!stopsData || !routesData || !stopDetailsData) {
                  throw new Error("Failed to load necessary API data.");
             }
 
@@ -430,6 +493,19 @@
                 downtownList.innerHTML = '<li>No train lines found for this stop ID. Check configuration.</li>';
                 throw new Error(`No lines found for stop ID: ${TARGET_STOP_ID}`); // <-- Corrected line
             }
+
+            const routeDetailsPairs = await Promise.all(lines.map(async (line) => {
+                try {
+                    const details = await queryApi(`${API_BASE_URL}/routes/${encodeURIComponent(line)}`);
+                    return [line, details];
+                } catch (error) {
+                    console.warn(`Failed to fetch route details for line ${line}:`, error);
+                    return [line, null];
+                }
+            }));
+            routeDetailsByLine = Object.fromEntries(
+                routeDetailsPairs.filter(([, details]) => details && typeof details === 'object')
+            );
 
             // Display train times for each line
             lines.forEach(line => {
